@@ -309,3 +309,45 @@ extern "C" double shim_search_i8(void* hp, const int8_t* q, int64_t nq, int64_t 
   res.sync_stream();
   return std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0).count();
 }
+
+#include <cuvs/neighbors/xyz.hpp>
+struct shim_xyz { std::unique_ptr<cuvs::neighbors::xyz::index> idx; };
+extern "C" void* shim_xyz_build(const float* data, int64_t n, int64_t dim, int deg, int ideg, int pack,
+                                double* build_ms, int rotate)
+{
+  cudaDeviceSynchronize();
+  auto& res = R();
+  cuvs::neighbors::xyz::index_params ip;
+  ip.cagra_params.graph_degree              = deg;
+  ip.cagra_params.intermediate_graph_degree = ideg;
+  ip.cagra_params.graph_build_params = cagra::graph_build_params::nn_descent_params(ideg);
+  ip.pack_graph = pack != 0;
+  ip.rotation   = rotate == 1   ? cuvs::neighbors::xyz::rotation_mode::kAlways
+                  : rotate == 0 ? cuvs::neighbors::xyz::rotation_mode::kNever
+                                : cuvs::neighbors::xyz::rotation_mode::kAuto;
+  auto t0 = std::chrono::high_resolution_clock::now();
+  auto* h = new shim_xyz;
+  h->idx  = std::make_unique<cuvs::neighbors::xyz::index>(cuvs::neighbors::xyz::build(
+    res, ip, raft::make_device_matrix_view<const float, int64_t>(data, n, dim)));
+  res.sync_stream();
+  *build_ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0).count();
+  return h;
+}
+extern "C" void shim_xyz_free(void* h) { delete static_cast<shim_xyz*>(h); }
+extern "C" size_t shim_xyz_memory(void* h) { return static_cast<shim_xyz*>(h)->idx->memory_bytes(); }
+extern "C" double shim_xyz_search(void* hp, const float* q, int64_t nq, int64_t dim, int k, int itopk, int team,
+                                  float eps, int refine_c, int64_t* nb, float* dd)
+{
+  auto* h = static_cast<shim_xyz*>(hp);
+  auto& res = R();
+  cuvs::neighbors::xyz::search_params sp;
+  sp.cagra_params.itopk_size = itopk; sp.cagra_params.team_size = team;
+  sp.ads_eps = eps; sp.refine_candidates = refine_c;
+  cudaDeviceSynchronize();
+  auto t0 = std::chrono::high_resolution_clock::now();
+  cuvs::neighbors::xyz::search(res, sp, *h->idx, raft::make_device_matrix_view<const float, int64_t>(q, nq, dim),
+                               raft::make_device_matrix_view<int64_t, int64_t>(nb, nq, k),
+                               raft::make_device_matrix_view<float, int64_t>(dd, nq, k));
+  res.sync_stream();
+  return std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0).count();
+}

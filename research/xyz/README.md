@@ -63,3 +63,28 @@ Notes from the research machine (CUDA 13.1, driver 595, A10G):
 
 Build time is dominated by NN-descent (~95%); XYZ builds as fast as or faster than CAGRA-Q
 (e.g. Deep-10M 131 s vs 152 s).
+
+## cuVS API (`cuvs::neighbors::xyz`, `cpp/include/cuvs/neighbors/xyz.hpp`)
+
+`xyz::build` builds the CAGRA graph, quantizes the vectors (rotating them first when
+`dim >= auto_rotation_min_dim`, default 512) and packs the graph; `xyz::search` quantizes the
+queries, runs single-CTA CAGRA with ADSampling (`cagra::search_params::ads_eps`, only when rotated)
+and re-ranks with `refine`. The environment-variable switches of the research commit are replaced by
+`cagra::search_params::ads_eps` and `cagra::search_params::graph_packed_u24`.
+Benchmark: `run_xyz_api.py` (`XYZ_ROT=1` always rotate, `0` never, `2` auto), tables via
+`summ_xyzapi.py` / `summ_rot.py`.
+
+End to end (build from scratch; query rotation, search and refine inside the measured time),
+A10G, 10k queries, 3-byte graph, QPS ratio vs CAGRA-Q at equal recall@10:
+
+| dataset | dim | rotated | not rotated | default (auto) |
+|---|---|---|---|---|
+| SIFT-1M | 128 | x1.39 | x1.46 | x1.46 |
+| GloVe-1M | 100 | x1.29-1.30 | x1.31 | x1.31 |
+| NYTimes | 256 | x1.36 | x1.35 | x1.35 |
+| BigANN-10M | 128 | x1.47 | x1.51 | x1.51 |
+| Deep-10M | 96 | x1.40-1.42 | x1.43-1.47 | x1.43-1.47 |
+| GIST-1M | 960 | x1.39-1.44 | x0.90-0.93 | x1.39-1.44 |
+
+Rotation does not change recall at dim <= 256 (within +-0.004) and only costs the query GEMM; at
+dim 960 it is required for ADSampling.
