@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <cstdlib>
+
 #include "../smem_utils.cuh"
 
 // Include tags header before any other includes that might open namespaces
@@ -899,6 +901,9 @@ void select_and_run(
 
     using kernel_t = search_single_cta_kernel_func_t<DataT, IndexT, DistanceT, SourceIndexT>;
     auto kernel    = raft::kernel_ref<kernel_t>{launcher->get_kernel()};
+    // ADSampling early exit (0 disables it) and 3-byte packed graph, see cagra::search_params.
+    const float ads_eps = ps.ads_eps;
+    const int graph_u24 = ps.graph_packed_u24 ? 1 : 0;
 
     cuvs::neighbors::detail::safely_launch_kernel_with_smem_size<kernel_t>(
       smem_size,
@@ -932,7 +937,9 @@ void select_and_run(
                             query_id_offset,
                             dev_desc,
                             static_cast<IndexT>(graph.extent(0)),
-                            filter_payload);
+                            filter_payload,
+                            ads_eps,
+                            graph_u24);
       },
       kernel.handle);
   }

@@ -49,7 +49,9 @@ extern "C" __global__ __launch_bounds__(1024, 1) void search_single_cta(
   const std::uint32_t query_id_offset,
   const dataset_desc_base* dataset_desc,
   const index_t graph_size,
-  cagra_sample_filter_t filter_payload)
+  cagra_sample_filter_t filter_payload,
+  const float ads_eps,
+  const int graph_u24)
 {
   single_cta_search::search_kernel_jit<k_topk_by_bitonic_sort,
                                        k_bitonic_sort_and_merge_multi_warps,
@@ -81,7 +83,9 @@ extern "C" __global__ __launch_bounds__(1024, 1) void search_single_cta(
                                                        query_id_offset,
                                                        dataset_desc,
                                                        graph_size,
-                                                       filter_payload);
+                                                       filter_payload,
+                                                       ads_eps,
+                                                       graph_u24);
 }
 
 static_assert(

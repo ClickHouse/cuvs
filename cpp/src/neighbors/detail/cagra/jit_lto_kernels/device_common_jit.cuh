@@ -119,8 +119,11 @@ RAFT_DEVICE_INLINE_FUNCTION void compute_distance_to_child_nodes_jit(
   const IndexT* __restrict__ parent_indices,
   const IndexT* __restrict__ internal_topk_list,
   const uint32_t search_width,
-  int* __restrict__ result_position = nullptr,
-  const int max_result_position     = 0)
+  int* __restrict__ result_position         = nullptr,
+  const int max_result_position             = 0,
+  const DistanceT* __restrict__ ads_tau_ptr = nullptr,
+  const float ads_eps                       = 0.f,
+  const int graph_u24                       = 0)
 {
   constexpr IndexT index_msb_1_mask = utils::gen_index_msb_1_mask<IndexT>::value;
   constexpr IndexT invalid_index    = ~static_cast<IndexT>(0);
@@ -132,7 +135,18 @@ RAFT_DEVICE_INLINE_FUNCTION void compute_distance_to_child_nodes_jit(
     IndexT child_id             = invalid_index;
     if (smem_parent_id != invalid_index) {
       const auto parent_id = internal_topk_list[smem_parent_id] & ~index_msb_1_mask;
-      child_id             = knn_graph[(i % knn_k) + (static_cast<int64_t>(knn_k) * parent_id)];
+      if (graph_u24) {
+        // 3-byte packed neighbor ids; 0xFFFFFF marks an invalid entry
+        const auto* g8 = reinterpret_cast<const uint8_t*>(knn_graph);
+        const uint64_t off =
+          3ull * ((i % knn_k) + (static_cast<uint64_t>(knn_k) * static_cast<uint64_t>(parent_id)));
+        const uint32_t v = static_cast<uint32_t>(g8[off]) |
+                           (static_cast<uint32_t>(g8[off + 1]) << 8) |
+                           (static_cast<uint32_t>(g8[off + 2]) << 16);
+        child_id = (v == 0xFFFFFFu) ? invalid_index : static_cast<IndexT>(v);
+      } else {
+        child_id = knn_graph[(i % knn_k) + (static_cast<int64_t>(knn_k) * parent_id)];
+      }
     }
     if (child_id != invalid_index) {
       if (hashmap::insert(visited_hashmap_ptr, visited_hash_bitlen, child_id) == 0) {
@@ -165,12 +179,50 @@ RAFT_DEVICE_INLINE_FUNCTION void compute_distance_to_child_nodes_jit(
     const bool valid_i  = STATIC_RESULT_POSITION ? (j < num_k) : (j < max_result_position);
     const auto child_id = valid_i ? result_child_indices_ptr[j] : invalid_index;
 
-    const auto per_thread =
-      (child_id != invalid_index)
-        ? cuvs::neighbors::cagra::detail::compute_distance_per_thread<DataT, IndexT, DistanceT>(
-            args, child_id)
-        : (lead_lane ? raft::upper_bound<DistanceT>() : 0);
-    const DistanceT child_dist = device::team_sum(per_thread, team_size_bits);
+    DistanceT child_dist;
+    if (ads_eps > 0.f) {
+      // ADSampling early exit (L2 on randomly rotated data): accumulate the distance chunk by
+      // chunk and drop the candidate once  partial * D / d > tau * (1 + eps / sqrt(d))^2, where
+      // tau is the current worst distance in the internal top-k. The loop runs until every team
+      // of the warp is done, so the full-warp shuffles in team_sum stay converged.
+      const DistanceT tau =
+        (ads_tau_ptr != nullptr) ? *ads_tau_ptr : utils::get_max_value<DistanceT>();
+      const bool tau_valid = tau < utils::get_max_value<DistanceT>();
+      bool active          = child_id != invalid_index;
+      DistanceT acc        = 0;
+      for (uint32_t chunk = 0; __any_sync(0xffffffffu, active); chunk++) {
+        uint32_t dims_end    = 0;
+        bool last            = true;
+        const DistanceT part = active
+                                 ? cuvs::neighbors::cagra::detail::
+                                     compute_distance_per_thread_chunk<DataT, IndexT, DistanceT>(
+                                       args, child_id, chunk, &dims_end, &last)
+                                 : DistanceT{0};
+        const DistanceT sum  = device::team_sum(part, team_size_bits);
+        if (active) {
+          acc += sum;
+          if (last) {
+            active = false;
+          } else if (tau_valid) {
+            const float d   = static_cast<float>(dims_end);
+            const float f   = 1.f + ads_eps / sqrtf(d);
+            const float est = static_cast<float>(acc) * (static_cast<float>(args.dim) / d);
+            if (est > static_cast<float>(tau) * f * f) {
+              acc    = raft::upper_bound<DistanceT>();
+              active = false;
+            }
+          }
+        }
+      }
+      child_dist = (child_id != invalid_index) ? acc : raft::upper_bound<DistanceT>();
+    } else {
+      const auto per_thread =
+        (child_id != invalid_index)
+          ? cuvs::neighbors::cagra::detail::compute_distance_per_thread<DataT, IndexT, DistanceT>(
+              args, child_id)
+          : (lead_lane ? raft::upper_bound<DistanceT>() : 0);
+      child_dist = device::team_sum(per_thread, team_size_bits);
+    }
     __syncwarp();
 
     // Store the distance

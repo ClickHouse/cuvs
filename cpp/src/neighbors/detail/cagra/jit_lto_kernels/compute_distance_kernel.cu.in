@@ -61,4 +61,20 @@ compute_distance_per_thread<data_t, index_t, distance_t>(const args_t args, inde
                                k_smem_dtype>(args, dataset_index);
 }
 
+template <>
+__device__ distance_t compute_distance_per_thread_chunk<data_t, index_t, distance_t>(
+  const args_t args, index_t dataset_index, uint32_t chunk, uint32_t* dims_end, bool* last)
+{
+  return compute_distance_chunk_impl<k_team_size,
+                                     k_dataset_block_dim,
+                                     k_pq_bits,
+                                     k_pq_len,
+                                     codebook_t,
+                                     data_t,
+                                     index_t,
+                                     distance_t,
+                                     query_t,
+                                     k_smem_dtype>(args, dataset_index, chunk, dims_end, last);
+}
+
 }  // namespace cuvs::neighbors::cagra::detail

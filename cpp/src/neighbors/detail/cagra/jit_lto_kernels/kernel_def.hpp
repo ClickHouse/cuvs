@@ -49,7 +49,9 @@ using search_single_cta_kernel_func_t =
        const std::uint32_t,
        const dataset_descriptor_base_t<DataT, IndexT, DistanceT>*,
        const IndexT,
-       cagra_sample_filter<SourceIndexT>);
+       cagra_sample_filter<SourceIndexT>,
+       const float,
+       const int);
 
 namespace single_cta_search {
 

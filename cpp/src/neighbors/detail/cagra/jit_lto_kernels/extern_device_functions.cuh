@@ -40,6 +40,15 @@ compute_distance(const typename dataset_descriptor_base_t<DataT, IndexT, Distanc
 template <typename DataT, typename IndexT, typename DistanceT>
 extern __device__ DistanceT compute_distance_per_thread(
   const typename dataset_descriptor_base_t<DataT, IndexT, DistanceT>::args_t, IndexT);
+
+/** Per-thread partial distance over one chunk of dimensions (ADSampling early-exit path). */
+template <typename DataT, typename IndexT, typename DistanceT>
+extern __device__ DistanceT compute_distance_per_thread_chunk(
+  const typename dataset_descriptor_base_t<DataT, IndexT, DistanceT>::args_t,
+  IndexT,
+  uint32_t chunk,
+  uint32_t* dims_end,
+  bool* last);
 }  // namespace cuvs::neighbors::cagra::detail
 
 namespace cuvs::neighbors::detail {
