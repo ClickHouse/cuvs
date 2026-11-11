@@ -65,6 +65,54 @@ RAFT_DEVICE_INLINE_FUNCTION auto compute_distance_standard_worker_impl(
   return r;
 }
 
+/**
+ * Partial (per-thread) distance over one chunk of `kTeamSize * vlen` consecutive dimensions,
+ * used by the ADSampling early-exit path. Chunk `chunk` covers dimensions
+ * [chunk * C, min((chunk + 1) * C, dim)), C = kTeamSize * vlen. `dims_end` receives the end of the
+ * chunk and `last` whether it is the final one.
+ */
+template <typename DescriptorT>
+_RAFT_DEVICE __noinline__ auto compute_distance_standard_chunk_impl(
+  const typename DescriptorT::args_t args,
+  const typename DescriptorT::INDEX_T dataset_index,
+  uint32_t chunk,
+  uint32_t* dims_end,
+  bool* last) -> typename DescriptorT::DISTANCE_T
+{
+  using DATA_T             = typename DescriptorT::DATA_T;
+  using DISTANCE_T         = typename DescriptorT::DISTANCE_T;
+  using LOAD_T             = typename DescriptorT::LOAD_T;
+  using QUERY_T            = typename DescriptorT::QUERY_T;
+  constexpr auto kTeamSize = DescriptorT::kTeamSize;
+  constexpr auto vlen      = device::get_vlen<LOAD_T, DATA_T>();
+  constexpr uint32_t C     = kTeamSize * vlen;
+  const uint32_t dim       = args.dim;
+  const uint32_t begin     = chunk * C;
+  const uint32_t end       = begin + C < dim ? begin + C : dim;
+  *dims_end                = end;
+  *last                    = end >= dim;
+  const DATA_T* dataset_ptr =
+    DescriptorT::ptr(args) + (static_cast<std::uint64_t>(DescriptorT::ld(args)) * dataset_index);
+  DISTANCE_T r     = 0;
+  const uint32_t k = begin + (threadIdx.x % kTeamSize) * vlen;
+  if (k < end) {
+    DATA_T data[vlen];
+    device::ldg_cg(reinterpret_cast<LOAD_T&>(data),
+                   reinterpret_cast<const LOAD_T*>(dataset_ptr + k));
+#pragma unroll
+    for (uint32_t v = 0; v < vlen; v++) {
+      QUERY_T d;
+      device::lds(d,
+                  args.smem_ws_ptr +
+                    sizeof(QUERY_T) *
+                      device::swizzling<DescriptorT::kDatasetBlockDim, vlen * kTeamSize>(k + v));
+      r += dist_op<QUERY_T, DISTANCE_T>(
+        d, cuvs::spatial::knn::detail::utils::mapping<QUERY_T>{}(data[v]));
+    }
+  }
+  return r;
+}
+
 template <typename DescriptorT>
 _RAFT_DEVICE __noinline__ auto compute_distance_standard_impl(
   const typename DescriptorT::args_t args, const typename DescriptorT::INDEX_T dataset_index) ->
@@ -293,6 +341,45 @@ __device__ DistanceT compute_distance_impl(
                   "compute_distance_impl: unsupported PQ_BITS/PQ_LEN/CodebookT/QueryT for CAGRA "
                   "JIT descriptor");
     return DistanceT{};
+  }
+}
+
+/** Chunked variant for ADSampling. VPQ datasets have no chunked form: the whole distance is
+ * returned as a single (last) chunk, which disables the early exit for them. */
+template <uint32_t TeamSize,
+          uint32_t DatasetBlockDim,
+          uint32_t PQ_BITS,
+          uint32_t PQ_LEN,
+          typename CodebookT,
+          typename DataT,
+          typename IndexT,
+          typename DistanceT,
+          typename QueryT,
+          cuvs::neighbors::cagra::internal_dtype SmemDType>
+__device__ DistanceT compute_distance_chunk_impl(
+  const typename dataset_descriptor_base_t<DataT, IndexT, DistanceT>::args_t args,
+  IndexT dataset_index,
+  uint32_t chunk,
+  uint32_t* dims_end,
+  bool* last)
+{
+  if constexpr (PQ_BITS == 0 && PQ_LEN == 0 && std::is_same_v<CodebookT, void>) {
+    using desc_t =
+      standard_dataset_descriptor_t<TeamSize, DatasetBlockDim, DataT, IndexT, DistanceT, QueryT>;
+    return compute_distance_standard_chunk_impl<desc_t>(args, dataset_index, chunk, dims_end, last);
+  } else {
+    *dims_end = args.dim;
+    *last     = true;
+    return compute_distance_impl<TeamSize,
+                                 DatasetBlockDim,
+                                 PQ_BITS,
+                                 PQ_LEN,
+                                 CodebookT,
+                                 DataT,
+                                 IndexT,
+                                 DistanceT,
+                                 QueryT,
+                                 SmemDType>(args, dataset_index);
   }
 }
 

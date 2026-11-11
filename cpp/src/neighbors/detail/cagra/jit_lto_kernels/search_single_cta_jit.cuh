@@ -81,7 +81,9 @@ RAFT_DEVICE_INLINE_FUNCTION void search_core(
   const std::uint32_t query_id_offset,  // Offset to add to query_id when calling filter
   const dataset_descriptor_base_t<DataT, IndexT, DistanceT>* dataset_desc,
   cagra_sample_filter<SourceIndexT> filter_payload,
-  const IndexT graph_size = 0)  // Original number of bits
+  const IndexT graph_size = 0,  // Original number of bits
+  const float ads_eps     = 0.f,
+  const int graph_u24     = 0)
 {
   using LOAD_T = device::LOAD_128BIT_T;
 
@@ -292,7 +294,12 @@ RAFT_DEVICE_INLINE_FUNCTION void search_core(
       0u,
       parent_list_buffer,
       result_indices_buffer,
-      search_width);
+      search_width,
+      nullptr,
+      0,
+      result_distances_buffer + internal_topk - 1,  // tau: worst distance in the internal top-k
+      ads_eps,
+      graph_u24);
     // Critical: __syncthreads() must be reached by ALL threads
     // If any thread is stuck in compute_distance_to_child_nodes_jit, this will hang
     __syncthreads();
@@ -487,7 +494,9 @@ __device__ void search_kernel_jit(
   const std::uint32_t query_id_offset,  // Offset to add to query_id when calling filter
   const dataset_descriptor_base_t<DataT, IndexT, DistanceT>* dataset_desc,
   const IndexT graph_size,
-  cagra_sample_filter<SourceIndexT> filter_payload)
+  cagra_sample_filter<SourceIndexT> filter_payload,
+  const float ads_eps = 0.f,
+  const int graph_u24 = 0)
 {
   const auto query_id = blockIdx.y;
   search_core<TOPK_BY_BITONIC_SORT,
@@ -521,7 +530,9 @@ __device__ void search_kernel_jit(
                             query_id_offset,
                             dataset_desc,
                             filter_payload,
-                            graph_size);
+                            graph_size,
+                            ads_eps,
+                            graph_u24);
 }
 
 // JIT persistent device implementation - called from extern "C" __global__ entry in generated .cu

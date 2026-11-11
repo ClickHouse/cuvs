@@ -38,6 +38,7 @@
 #include <raft/matrix/select_k.cuh>
 
 #include <cstddef>
+#include <cstdlib>
 
 // All includes are done before opening namespace to avoid nested namespace issues
 namespace cuvs::neighbors::cagra::detail {
@@ -52,7 +53,7 @@ void search_main_core(
   raft::resources const& res,
   search_params params,
   const dataset_descriptor_host<DataT, IndexT, DistanceT>& dataset_desc,
-  raft::device_matrix_view<const IndexT, int64_t, raft::row_major> graph,
+  raft::device_matrix_view<const IndexT, int64_t, raft::row_major> graph_in,
   std::optional<raft::device_vector_view<const SourceIdxT, int64_t>> source_indices,
   raft::device_matrix_view<const DataT, int64_t, raft::row_major> queries,
   raft::device_matrix_view<OutputIdxT, int64_t, raft::row_major> neighbors,
@@ -60,6 +61,14 @@ void search_main_core(
   uint32_t query_logical_dim,
   CagraSampleFilterT sample_filter = CagraSampleFilterT())
 {
+  // RESEARCH: 3-byte packed graph (CUVS_CAGRA_GRAPH_U24=1). The index holds the packed rows as a
+  // [n, 3 * degree / 4] uint32 matrix; the search works with the logical degree, and the kernel
+  // decodes 3-byte neighbor ids. The view below is never dereferenced as uint32 rows.
+  auto graph = graph_in;
+  if (const char* e = std::getenv("CUVS_CAGRA_GRAPH_U24"); e != nullptr && e[0] == '1') {
+    graph = raft::make_device_matrix_view<const IndexT, int64_t>(
+      graph_in.data_handle(), graph_in.extent(0), graph_in.extent(1) * 4 / 3);
+  }
   static_assert(std::is_same_v<IndexT, uint32_t>,
                 "Only uint32_t is supported as the graph element type (internal index type)");
   RAFT_LOG_DEBUG("# dataset size = %lu, dim = %lu\n",
