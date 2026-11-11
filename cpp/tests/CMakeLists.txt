@@ -124,6 +124,13 @@ ConfigureTest(
 target_compile_definitions(NEIGHBORS_TEST PRIVATE CUVS_CUTILE_ENABLED=${CUVS_CUTILE_ENABLED})
 
 ConfigureTest(
+  NAME NEIGHBORS_XYZ_TEST
+  PATH neighbors/xyz.cu
+  GPUS 1
+  PERCENT 100
+)
+
+ConfigureTest(
   NAME NEIGHBORS_TIERED_INDEX_TEST
   PATH neighbors/tiered_index.cu
   GPUS 1

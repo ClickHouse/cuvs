@@ -133,6 +133,23 @@ struct search_params : cuvs::neighbors::search_params {
   /** Data type of the query vector and codebook table on shared memory. Currently, only VPQ
    * supports FP8. **/
   internal_dtype smem_dtype = internal_dtype::F16;
+
+  /**
+   * ADSampling early exit for the distance computation (single-CTA search only; 0 disables it).
+   *
+   * The distance to each candidate is accumulated in chunks of dimensions, and the candidate is
+   * dropped once `partial * dim / d > tau * (1 + ads_eps / sqrt(d))^2`, where `d` is the number of
+   * dimensions processed so far and `tau` is the worst distance in the internal top-k. The estimate
+   * is only valid for L2 distances on randomly rotated data, which `cuvs::neighbors::xyz` takes care
+   * of. Typical values: 0.5 - 1.0. Has an effect only for high-dimensional data (several chunks).
+   */
+  float ads_eps = 0.0f;
+
+  /**
+   * The index graph stores 3-byte packed neighbor ids (`[n_rows, 3 * graph_degree / 4]` uint32
+   * matrix). Set by `cuvs::neighbors::xyz`; single-CTA search only.
+   */
+  bool graph_packed_u24 = false;
 };
 
 /**

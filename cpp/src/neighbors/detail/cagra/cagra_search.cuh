@@ -61,11 +61,13 @@ void search_main_core(
   uint32_t query_logical_dim,
   CagraSampleFilterT sample_filter = CagraSampleFilterT())
 {
-  // RESEARCH: 3-byte packed graph (CUVS_CAGRA_GRAPH_U24=1). The index holds the packed rows as a
-  // [n, 3 * degree / 4] uint32 matrix; the search works with the logical degree, and the kernel
-  // decodes 3-byte neighbor ids. The view below is never dereferenced as uint32 rows.
+  // 3-byte packed graph: the index holds the packed rows as a [n, 3 * degree / 4] uint32 matrix;
+  // the search works with the logical degree and the kernel decodes 3-byte neighbor ids. The view
+  // below is never dereferenced as uint32 rows.
   auto graph = graph_in;
-  if (const char* e = std::getenv("CUVS_CAGRA_GRAPH_U24"); e != nullptr && e[0] == '1') {
+  if (params.graph_packed_u24) {
+    RAFT_EXPECTS(params.algo == search_algo::SINGLE_CTA,
+                 "A 3-byte packed graph is only supported by the single-CTA search algorithm");
     graph = raft::make_device_matrix_view<const IndexT, int64_t>(
       graph_in.data_handle(), graph_in.extent(0), graph_in.extent(1) * 4 / 3);
   }

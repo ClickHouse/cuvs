@@ -901,16 +901,9 @@ void select_and_run(
 
     using kernel_t = search_single_cta_kernel_func_t<DataT, IndexT, DistanceT, SourceIndexT>;
     auto kernel    = raft::kernel_ref<kernel_t>{launcher->get_kernel()};
-    // RESEARCH: ADSampling early exit (L2 on randomly rotated data); 0 disables it.
-    float ads_eps = 0.f;
-    if (const char* e = std::getenv("CUVS_CAGRA_ADS_EPS"); e != nullptr) {
-      ads_eps = std::strtof(e, nullptr);
-    }
-    // RESEARCH: 3-byte packed graph rows
-    int graph_u24 = 0;
-    if (const char* e = std::getenv("CUVS_CAGRA_GRAPH_U24"); e != nullptr && e[0] == '1') {
-      graph_u24 = 1;
-    }
+    // ADSampling early exit (0 disables it) and 3-byte packed graph, see cagra::search_params.
+    const float ads_eps = ps.ads_eps;
+    const int graph_u24 = ps.graph_packed_u24 ? 1 : 0;
 
     cuvs::neighbors::detail::safely_launch_kernel_with_smem_size<kernel_t>(
       smem_size,
